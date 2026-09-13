@@ -79,6 +79,7 @@ BANNER
 }
 
 show_connection_card() {
+    [ -S "$SOCKET" ] && ln -sf "$SOCKET" /tmp/mysql.sock 2>/dev/null || true
     local pid
     pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
     local autostart_display
@@ -429,6 +430,8 @@ ENV
 
         "$MYSQL_CLIENT" $DEFAULTS -u root <<SQL
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASSWORD}';
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 
 CREATE USER '${MYSQL_USER}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_USER}'@'localhost' WITH GRANT OPTION;
@@ -555,6 +558,8 @@ BANNER
         exit 1
     fi
 
+    ln -sf "$SOCKET" /tmp/mysql.sock 2>/dev/null || true
+
     if [ "$is_first" = false ]; then
         printf "\033[9A\r"
     fi
@@ -565,6 +570,7 @@ BANNER
 
 cmd_down() {
     if [ ! -S "$SOCKET" ]; then
+        [ -L /tmp/mysql.sock ] && rm -f /tmp/mysql.sock 2>/dev/null || true
         print_banner "gray"
         exit 0
     fi
@@ -588,6 +594,8 @@ cmd_down() {
 
     printf "\r\033[K\033[?25h"
     trap - EXIT INT TERM
+
+    [ -L /tmp/mysql.sock ] && rm -f /tmp/mysql.sock 2>/dev/null || true
 
     print_banner "gray"
 }
