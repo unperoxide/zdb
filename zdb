@@ -211,6 +211,17 @@ cmd_install_symlinks() {
         echo -e "  ${YELLOW}Notice:${NC} Could not link automatically. Run manually:"
         echo "  sudo ln -sf $ZDB_DIR/zdb $BIN_DIR/zdb"
     fi
+
+    # Completions
+    if [ -f "$ZDB_DIR/completions/_zdb" ]; then
+        for comp_dir in "/opt/homebrew/share/zsh/site-functions" "/usr/local/share/zsh/site-functions" "$HOME/.zsh/completions"; do
+            if [ -d "$comp_dir" ] && [ -w "$comp_dir" ]; then
+                cp "$ZDB_DIR/completions/_zdb" "$comp_dir/_zdb"
+                echo -e "  ${GREEN}Completions:${NC} $comp_dir/_zdb"
+                break
+            fi
+        done
+    fi
 }
 
 cmd_autostart_enable() {
@@ -291,6 +302,9 @@ cmd_uninstall() {
     for user_bin in "$HOME/.local/bin" "$HOME/.composer/vendor/bin"; do
         rm -f "$user_bin/zdb" 2>/dev/null || true
     done
+    rm -f "/opt/homebrew/share/zsh/site-functions/_zdb" \
+          "/usr/local/share/zsh/site-functions/_zdb" \
+          "$HOME/.zsh/completions/_zdb" 2>/dev/null || true
     echo "  Removed: $BIN_DIR/zdb"
 
     if [ -f "$PLIST_PATH" ]; then

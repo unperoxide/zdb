@@ -1,0 +1,68 @@
+#compdef zdb
+
+_zdb() {
+    local -a commands
+    commands=(
+        'up:Start database engine'
+        'down:Stop database engine'
+        'status:Show status and connection details'
+        'cli:Open interactive MySQL console'
+        'backup:Create database backup'
+        'restore:Restore database from backup'
+        'setup:Run interactive setup wizard'
+        'autostart:Configure login startup'
+        'install:Link zdb to system PATH'
+        'uninstall:Remove global link and autostart'
+        'help:Show help guide'
+    )
+
+    local -a options
+    options=(
+        '-u:Start database engine'
+        '--up:Start database engine'
+        '-d:Stop database engine'
+        '--down:Stop database engine'
+        '-s:Show status and connection details'
+        '--status:Show status and connection details'
+        '-c:Open interactive MySQL console'
+        '--client:Open interactive MySQL console'
+        '-b:Create database backup'
+        '--backup:Create database backup'
+        '--restore:Restore database from backup'
+        '--setup:Run interactive setup wizard'
+        '--autostart:Configure login startup'
+        '--install:Link zdb to system PATH'
+        '--uninstall:Remove global link and autostart'
+        '-h:Show help guide'
+        '--help:Show help guide'
+    )
+
+    _arguments -C \
+        '1: :->cmd' \
+        '*: :->args'
+
+    case $state in
+        cmd)
+            _describe -t commands 'command' commands
+            _describe -t options 'option' options
+            ;;
+        args)
+            case $words[2] in
+                autostart|--autostart)
+                    local -a modes
+                    modes=(
+                        'enable:Start MySQL on login'
+                        'disable:Disable login startup'
+                        'status:Check autostart state'
+                    )
+                    _describe -t modes 'mode' modes
+                    ;;
+                restore|--restore)
+                    _files -g "*.sql"
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_zdb "$@"

@@ -16,9 +16,17 @@ Clone, setup, run. Fully portable across Apple Silicon.
 
 ## Quick Start
 
+Install with a single command:
+
 ```bash
-./zdb --setup
-zdb
+curl -fsSL https://raw.githubusercontent.com/unperoxide/zdb/main/install.sh | bash
+```
+
+Or clone directly:
+
+```bash
+git clone https://github.com/unperoxide/zdb.git ~/.zdb
+~/.zdb/zdb --setup
 ```
 
 Running `zdb` without arguments is smart:
@@ -80,7 +88,9 @@ zdb restore <file.sql>      # Restores database from dump
 
 ```
 ├── zdb
+├── install.sh
 ├── mysql-8.0.46/
+├── completions/
 ├── .env.example
 ├── .env
 ├── .gitignore
