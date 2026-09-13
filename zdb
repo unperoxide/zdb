@@ -108,7 +108,12 @@ show_connection_card() {
     printf "  %-10s : %s\n" "Memory" "$memory_display"
     printf "  %-10s : %b\n" "Autostart" "$autostart_display"
     printf "  %-10s : %s\n" "Timezone" "$MYSQL_TIMEZONE"
-    printf "  %-10s : %s\n" "Bind" "$MYSQL_BIND_ADDRESS"
+    local bind_display="$MYSQL_BIND_ADDRESS"
+    case "$MYSQL_BIND_ADDRESS" in
+        127.*) bind_display="${GRAY}${MYSQL_BIND_ADDRESS}${NC}" ;;
+        0.0.*) bind_display="${GREEN}${MYSQL_BIND_ADDRESS}${NC}" ;;
+    esac
+    printf "  %-10s : %b\n" "Bind" "$bind_display"
     echo ""
     echo -e "  ${BOLD}${BANNER_COLOR}Connection${NC}"
     printf "    %-8s : %s\n" "Host" "localhost"
@@ -569,10 +574,11 @@ BANNER
 }
 
 cmd_down() {
+    local no_banner="${1:-false}"
     if [ ! -S "$SOCKET" ]; then
         [ -L /tmp/mysql.sock ] && rm -f /tmp/mysql.sock 2>/dev/null || true
-        print_banner "gray"
-        exit 0
+        [ "$no_banner" = false ] && print_banner "gray"
+        return 0
     fi
 
     "$MYSQLADMIN" $DEFAULTS --socket="$SOCKET" -u root -p"${MYSQL_ROOT_PASSWORD}" shutdown &>/dev/null || true
@@ -597,7 +603,21 @@ cmd_down() {
 
     [ -L /tmp/mysql.sock ] && rm -f /tmp/mysql.sock 2>/dev/null || true
 
-    print_banner "gray"
+    [ "$no_banner" = false ] && print_banner "gray"
+    return 0
+}
+
+cmd_restart() {
+    if [ -f "$ZDB_DIR/.env" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$ZDB_DIR/.env"
+        set +a
+    fi
+    if [ -S "$SOCKET" ]; then
+        cmd_down true
+    fi
+    cmd_up
 }
 
 cmd_status() {
@@ -616,7 +636,12 @@ cmd_status() {
         printf "  %-10s : %b\n" "Status" "${RED}Stopped${NC}"
         printf "  %-10s : %b\n" "Autostart" "$autostart_display"
         printf "  %-10s : %s\n" "Timezone" "$MYSQL_TIMEZONE"
-        printf "  %-10s : %s\n" "Bind" "$MYSQL_BIND_ADDRESS"
+        local bind_display="$MYSQL_BIND_ADDRESS"
+        case "$MYSQL_BIND_ADDRESS" in
+            127.*) bind_display="${GRAY}${MYSQL_BIND_ADDRESS}${NC}" ;;
+            0.0.*) bind_display="${GREEN}${MYSQL_BIND_ADDRESS}${NC}" ;;
+        esac
+        printf "  %-10s : %b\n" "Bind" "$bind_display"
         echo ""
         echo "  Start with: zdb -u"
         echo ""
@@ -694,6 +719,7 @@ cmd_help() {
     echo -e "  ${BOLD}${BANNER_COLOR}Commands${NC}"
     echo "    up, -u              Start database engine"
     echo "    down, -d            Stop database engine"
+    echo "    restart, -r         Restart database engine"
     echo "    status, -s          Show status and connection details"
     echo "    cli, -c             Open interactive MySQL console"
     echo "    backup, -b          Create timestamped database backup"
@@ -753,6 +779,9 @@ case "$ACTION" in
         ;;
     -d|--down|down|-down)
         cmd_down
+        ;;
+    -r|--restart|restart|-restart)
+        cmd_restart
         ;;
     -s|--status|status|-status)
         cmd_status

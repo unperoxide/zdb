@@ -5,6 +5,7 @@ _zdb() {
     commands=(
         'up:Start database engine'
         'down:Stop database engine'
+        'restart:Restart database engine'
         'status:Show status and connection details'
         'cli:Open interactive MySQL console'
         'backup:Create database backup'
@@ -22,6 +23,8 @@ _zdb() {
         '--up:Start database engine'
         '-d:Stop database engine'
         '--down:Stop database engine'
+        '-r:Restart database engine'
+        '--restart:Restart database engine'
         '-s:Show status and connection details'
         '--status:Show status and connection details'
         '-c:Open interactive MySQL console'

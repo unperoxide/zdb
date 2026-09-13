@@ -42,6 +42,7 @@ Running `zdb` without arguments is smart:
 zdb                         # Start engine or show connection card
 zdb up, -u                  # Start database engine
 zdb down, -d                # Stop database engine
+zdb restart, -r             # Restart database engine
 zdb status, -s              # Show status and connection details
 zdb cli, -c                 # Open interactive MySQL console
 zdb backup, -b              # Create database backup
