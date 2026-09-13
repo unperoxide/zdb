@@ -1,0 +1,769 @@
+#!/bin/bash
+set -euo pipefail
+
+# Directory
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ZDB_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+VERSION="8.0.46"
+
+# Colors
+BOLD='\033[1m'
+DIM='\033[2m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+
+# Theme color
+BANNER_COLOR="$YELLOW"
+
+# System paths
+BIN_DIR="/usr/local/bin"
+PLIST_NAME="com.zdb.mysql"
+PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
+
+# Env
+if [ -f "$ZDB_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ZDB_DIR/.env"
+    set +a
+fi
+
+# Defaults
+MYSQL_PORT="${MYSQL_PORT:-3306}"
+MYSQL_BIND_ADDRESS="${MYSQL_BIND_ADDRESS:-127.0.0.1}"
+MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-root}"
+MYSQL_USER="${MYSQL_USER:-${MYSQL_DEV_USER:-dev}}"
+MYSQL_PASSWORD="${MYSQL_PASSWORD:-${MYSQL_DEV_PASSWORD:-p@\$\$w0rd}}"
+MYSQL_TIMEZONE="${MYSQL_TIMEZONE:-SYSTEM}"
+MYSQL_BUFFER_POOL="${MYSQL_BUFFER_POOL:-256M}"
+
+# Runtime
+MYSQL_DIR="$ZDB_DIR/mysql-${VERSION}"
+DEFAULTS="--defaults-file=$ZDB_DIR/my.cnf"
+SOCKET="$ZDB_DIR/run/mysql.sock"
+PID_FILE="$ZDB_DIR/run/mysql.pid"
+MYSQLD="$MYSQL_DIR/bin/mysqld"
+MYSQLD_SAFE="$MYSQL_DIR/bin/mysqld_safe"
+MYSQLADMIN="$MYSQL_DIR/bin/mysqladmin"
+MYSQL_CLIENT="$MYSQL_DIR/bin/mysql"
+MYSQLDUMP="$MYSQL_DIR/bin/mysqldump"
+
+# Visuals
+
+print_banner() {
+    local color="${1:-$BANNER_COLOR}"
+    [ "$color" = "gray" ] && color="$GRAY"
+
+    echo ""
+    printf "%b" "${color}${BOLD}"
+    cat << 'BANNER'
+  ███████╗██████╗ ██████╗ 
+  ╚══███╔╝██╔══██╗██╔══██╗
+    ███╔╝ ██║  ██║██████╔╝
+   ███╔╝  ██║  ██║██╔══██╗
+  ███████╗██████╔╝██████╔╝
+  ╚══════╝╚═════╝ ╚═════╝ 
+BANNER
+    echo -e "${NC}  ${color}${BOLD}ZDB${NC} ${DIM}• MySQL Version: ${VERSION}${NC}\n"
+}
+
+show_connection_card() {
+    local pid
+    pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
+    local autostart_display
+    if [ -f "$PLIST_PATH" ]; then
+        autostart_display="${GREEN}Enabled${NC}"
+    else
+        autostart_display="${DIM}Disabled${NC}"
+    fi
+
+    local memory_display="unknown"
+    if [ "$pid" != "unknown" ]; then
+        local rss
+        rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
+        if [ -n "$rss" ] && [ "$rss" -gt 0 ] 2>/dev/null; then
+            if [ "$rss" -ge 1048576 ]; then
+                memory_display=$(awk "BEGIN {printf \"%.2fGB\", $rss / 1048576}")
+            else
+                memory_display=$(awk "BEGIN {printf \"%.1fMB\", $rss / 1024}")
+            fi
+        fi
+    fi
+
+    printf "  %-12s %b\n" "Status:" "${GREEN}Running${NC}"
+    printf "  %-12s %s\n" "Socket:" "$SOCKET"
+    printf "  %-12s %s\n" "PID:" "$pid"
+    printf "  %-12s %s\n" "Memory:" "$memory_display"
+    printf "  %-12s %b\n" "Autostart:" "$autostart_display"
+    printf "  %-12s %s\n" "Timezone:" "$MYSQL_TIMEZONE"
+    echo ""
+    echo -e "  ${BOLD}${BANNER_COLOR}Connection${NC}"
+    printf "\t%-12s %s\n" "Host:" "$MYSQL_BIND_ADDRESS"
+    printf "\t%-12s %s\n" "" "localhost"
+    printf "\t%-12s %s\n" "Port:" "$MYSQL_PORT"
+    printf "\t%-12s %s\n" "User:" "$MYSQL_USER"
+    printf "\t%-12s %s\n" "Password:" "$MYSQL_PASSWORD"
+    local url="mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@${MYSQL_BIND_ADDRESS}:${MYSQL_PORT}/"
+    printf "\t%-12s %b\n" "URL:" "\033]8;;${url}\033\\${url}\033]8;;\033\\"
+    echo ""
+}
+
+# Helpers
+
+is_running() {
+    [ -S "$SOCKET" ] && "$MYSQLADMIN" $DEFAULTS --socket="$SOCKET" -u root -p"$MYSQL_ROOT_PASSWORD" ping &>/dev/null 2>&1
+}
+
+generate_config() {
+    cat > "$ZDB_DIR/my.cnf" <<CONF
+[mysqld]
+# Paths
+basedir  = $MYSQL_DIR
+datadir  = $ZDB_DIR/data
+socket   = $ZDB_DIR/run/mysql.sock
+pid-file = $ZDB_DIR/run/mysql.pid
+log-error = $ZDB_DIR/logs/error.log
+tmpdir   = $ZDB_DIR/tmp
+
+# Network
+port = $MYSQL_PORT
+bind-address = $MYSQL_BIND_ADDRESS
+mysqlx = 0
+
+# Character set
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# Authentication
+default-authentication-plugin = mysql_native_password
+
+# Timezone
+default-time-zone = '$MYSQL_TIMEZONE'
+
+# InnoDB
+innodb_buffer_pool_size = $MYSQL_BUFFER_POOL
+innodb_log_file_size = 48M
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method = O_DIRECT
+innodb_file_per_table = 1
+
+# Connections
+max_connections = 30
+thread_cache_size = 8
+wait_timeout = 600
+interactive_timeout = 600
+
+# Buffers
+sort_buffer_size = 2M
+read_buffer_size = 1M
+read_rnd_buffer_size = 1M
+join_buffer_size = 2M
+
+# Performance
+disable-log-bin
+performance_schema = 0
+key_buffer_size = 16M
+max_allowed_packet = 64M
+
+[client]
+socket = $ZDB_DIR/run/mysql.sock
+CONF
+}
+
+# System
+
+cmd_install_symlinks() {
+    echo -e "${CYAN}Setting up global terminal command...${NC}"
+
+    local linked=false
+    if [ -w "$BIN_DIR" ]; then
+        ln -sf "$ZDB_DIR/zdb" "$BIN_DIR/zdb"
+        echo -e "  ${GREEN}Linked:${NC} $BIN_DIR/zdb"
+        linked=true
+    elif [ -t 0 ] && command -v sudo &>/dev/null; then
+        echo -e "  ${DIM}(Linking to ${BIN_DIR} requires administrator access)${NC}"
+        if sudo ln -sf "$ZDB_DIR/zdb" "$BIN_DIR/zdb"; then
+            echo -e "  ${GREEN}Linked:${NC} $BIN_DIR/zdb"
+            linked=true
+        fi
+    fi
+
+    for user_bin in "$HOME/.local/bin" "$HOME/.composer/vendor/bin"; do
+        if [ -d "$user_bin" ] && [ -w "$user_bin" ]; then
+            ln -sf "$ZDB_DIR/zdb" "$user_bin/zdb"
+            [ "$linked" = false ] && echo -e "  ${GREEN}Linked:${NC} $user_bin/zdb"
+            linked=true
+        fi
+    done
+
+    if [ "$linked" = false ]; then
+        echo -e "  ${YELLOW}Notice:${NC} Could not link automatically. Run manually:"
+        echo "  sudo ln -sf $ZDB_DIR/zdb $BIN_DIR/zdb"
+    fi
+}
+
+cmd_autostart_enable() {
+    mkdir -p "$HOME/Library/LaunchAgents"
+
+    cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${ZDB_DIR}/zdb</string>
+        <string>--up</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${ZDB_DIR}/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>${ZDB_DIR}/logs/launchd.log</string>
+</dict>
+</plist>
+PLIST
+
+    launchctl load "$PLIST_PATH" 2>/dev/null || true
+    echo -e "  ${GREEN}Autostart enabled.${NC} MySQL will start on login."
+}
+
+cmd_autostart_disable() {
+    if [ -f "$PLIST_PATH" ]; then
+        launchctl unload "$PLIST_PATH" 2>/dev/null || true
+        rm -f "$PLIST_PATH"
+        echo -e "  ${GREEN}Autostart disabled.${NC}"
+    else
+        echo "  Autostart is not currently enabled."
+    fi
+}
+
+cmd_autostart_status() {
+    if [ -f "$PLIST_PATH" ]; then
+        echo -e "  Autostart: ${GREEN}Enabled${NC} (${PLIST_PATH})"
+        echo "  To disable: zdb --autostart disable"
+    else
+        echo -e "  Autostart: ${YELLOW}Disabled${NC}"
+        echo "  To enable:  zdb --autostart enable"
+    fi
+}
+
+cmd_autostart() {
+    local action="${1:-}"
+    case "$action" in
+        enable|on|yes)
+            cmd_autostart_enable
+            ;;
+        disable|off|no)
+            cmd_autostart_disable
+            ;;
+        status|"")
+            cmd_autostart_status
+            ;;
+        *)
+            echo "Usage: zdb --autostart [enable|disable|status]"
+            ;;
+    esac
+}
+
+cmd_uninstall() {
+    echo -e "${CYAN}Uninstalling zdb system links...${NC}"
+
+    if [ -w "$BIN_DIR" ]; then
+        rm -f "$BIN_DIR/zdb"
+    else
+        sudo rm -f "$BIN_DIR/zdb" 2>/dev/null || true
+    fi
+    for user_bin in "$HOME/.local/bin" "$HOME/.composer/vendor/bin"; do
+        rm -f "$user_bin/zdb" 2>/dev/null || true
+    done
+    echo "  Removed: $BIN_DIR/zdb"
+
+    if [ -f "$PLIST_PATH" ]; then
+        launchctl unload "$PLIST_PATH" 2>/dev/null || true
+        rm -f "$PLIST_PATH"
+        echo "  Removed: autostart plist"
+    fi
+
+    echo ""
+    echo -e "${GREEN}Global command removed.${NC} Project directory and databases remain intact."
+}
+
+# Commands
+
+cmd_setup() {
+    print_banner
+    echo -e "  ${BOLD}Interactive Setup Wizard${NC}\n"
+
+    if [ -d "data/mysql" ]; then
+        echo -e "${YELLOW}MySQL is already set up and initialized.${NC}"
+        echo "To re-initialize, delete the 'data/' directory first."
+        exit 1
+    fi
+
+    if [ ! -f "$MYSQLD" ]; then
+        echo -e "  ${RED}MySQL binaries not found at: ${MYSQLD}${NC}"
+        exit 1
+    fi
+
+    # Config
+    if [ ! -f ".env" ]; then
+        echo -e "${CYAN}${BOLD}Configuration Setup${NC}"
+        echo "Default settings:"
+        echo "  • Port:          3306"
+        echo "  • Bind:          127.0.0.1"
+        echo "  • Dev User:      dev (Password: p@\$\$w0rd)"
+        echo "  • Root Password: root"
+        echo "  • Timezone:      SYSTEM"
+        echo "  • Buffer Pool:   256M"
+        echo ""
+
+        local use_defaults="y"
+        if [ -t 0 ]; then
+            read -r -p "Use default configuration? [Y/n]: " use_defaults
+        fi
+
+        case "$use_defaults" in
+            [nN]*)
+                echo ""
+                echo -e "${CYAN}Customize settings:${NC}"
+                read -r -p "  MySQL Port [3306]: " input_port
+                MYSQL_PORT="${input_port:-3306}"
+
+                read -r -p "  Root Password [root]: " input_root_pw
+                MYSQL_ROOT_PASSWORD="${input_root_pw:-root}"
+
+                read -r -p "  Username [dev]: " input_user
+                MYSQL_USER="${input_user:-dev}"
+
+                read -r -p "  Password [p@\$\$w0rd]: " input_pw
+                MYSQL_PASSWORD="${input_pw:-p@\$\$w0rd}"
+
+                local detected_tz
+                detected_tz="$(date +%z | sed -E 's/([+-][0-9]{2})([0-9]{2})/\1:\2/')"
+                read -r -p "  Timezone [SYSTEM or $detected_tz]: " input_tz
+                MYSQL_TIMEZONE="${input_tz:-SYSTEM}"
+
+                read -r -p "  InnoDB Buffer Pool [256M]: " input_pool
+                MYSQL_BUFFER_POOL="${input_pool:-256M}"
+                ;;
+            *)
+                echo "Applying defaults..."
+                ;;
+        esac
+
+        cat > "$ZDB_DIR/.env" <<ENV
+# Config
+MYSQL_PORT=${MYSQL_PORT}
+MYSQL_BIND_ADDRESS="${MYSQL_BIND_ADDRESS}"
+MYSQL_ROOT_PASSWORD='${MYSQL_ROOT_PASSWORD}'
+MYSQL_USER='${MYSQL_USER}'
+MYSQL_PASSWORD='${MYSQL_PASSWORD}'
+MYSQL_TIMEZONE="${MYSQL_TIMEZONE}"
+MYSQL_BUFFER_POOL="${MYSQL_BUFFER_POOL}"
+ENV
+        echo -e "${GREEN}Configuration saved to .env${NC}\n"
+    else
+        echo -e "${CYAN}Using existing .env configuration.${NC}\n"
+    fi
+
+    # Directories
+    mkdir -p data logs tmp run backups
+
+    # Config
+    generate_config
+
+    # Initialize
+    if [ ! -d "data/mysql" ]; then
+        echo -e "${CYAN}Initializing data directory...${NC}"
+        "$MYSQLD" $DEFAULTS --initialize-insecure --user="$(whoami)"
+        echo -e "${GREEN}Database initialized.${NC}"
+
+        # Users
+        echo -e "${CYAN}Configuring user privileges...${NC}"
+        "$MYSQLD_SAFE" $DEFAULTS --default-time-zone=SYSTEM --user="$(whoami)" &
+        local safe_pid=$!
+
+        echo -n "  Starting temporary instance"
+        for i in $(seq 1 30); do
+            if [ -S "$SOCKET" ] && "$MYSQLADMIN" $DEFAULTS -u root ping &>/dev/null; then
+                echo -e " ${GREEN}ready${NC}"
+                break
+            fi
+            echo -n "."
+            sleep 1
+        done
+
+        if ! "$MYSQLADMIN" $DEFAULTS -u root ping &>/dev/null; then
+            echo -e "\n${RED}Failed to start temporary server. Check logs/error.log${NC}"
+            exit 1
+        fi
+
+        "$MYSQL_CLIENT" $DEFAULTS -u root <<SQL
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASSWORD}';
+
+CREATE USER '${MYSQL_USER}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_USER}'@'localhost' WITH GRANT OPTION;
+
+CREATE USER '${MYSQL_USER}'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_USER}'@'%' WITH GRANT OPTION;
+
+FLUSH PRIVILEGES;
+SQL
+
+        echo -e "${GREEN}Users configured successfully.${NC}"
+
+        # Timezones
+        if [ -d "/usr/share/zoneinfo" ] && [ -x "$MYSQL_DIR/bin/mysql_tzinfo_to_sql" ]; then
+            echo -e "${CYAN}Loading system timezones...${NC}"
+            "$MYSQL_DIR/bin/mysql_tzinfo_to_sql" /usr/share/zoneinfo 2>/dev/null | \
+                "$MYSQL_CLIENT" $DEFAULTS -u root -p"${MYSQL_ROOT_PASSWORD}" mysql &>/dev/null || true
+            echo -e "${GREEN}Timezone tables loaded.${NC}"
+        fi
+
+        # Shutdown
+        "$MYSQLADMIN" $DEFAULTS -u root -p"${MYSQL_ROOT_PASSWORD}" shutdown
+        wait $safe_pid 2>/dev/null || true
+    fi
+
+    # Symlinks
+    echo ""
+    cmd_install_symlinks
+
+    # Autostart
+    echo ""
+    local enable_auto="y"
+    if [ -t 0 ]; then
+        read -r -p "Enable automatic startup on macOS login? [Y/n]: " enable_auto
+    fi
+    case "$enable_auto" in
+        [nN]*)
+            echo "Autostart disabled. You can enable it anytime with: zdb --autostart enable"
+            ;;
+        *)
+            cmd_autostart_enable
+            ;;
+    esac
+
+    echo ""
+    echo -e "${GREEN}${BOLD}Setup completed successfully!${NC}\n"
+    cmd_up
+}
+
+cmd_up() {
+    if is_running; then
+        print_banner
+        show_connection_card
+        exit 0
+    fi
+
+    if [ ! -f "$MYSQLD" ] || [ ! -d "$ZDB_DIR/data/mysql" ]; then
+        echo -e "  ${RED}Installation incomplete. Please run: zdb --setup${NC}"
+        exit 1
+    fi
+
+    generate_config
+
+    # Daemon
+    "$MYSQLD_SAFE" $DEFAULTS --user="$(whoami)" &>/dev/null &
+    local safe_pid=$!
+
+    local spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local colors=(
+        '\033[0;90m'
+        '\033[0;36m'
+        '\033[1;36m'
+        '\033[0;32m'
+        '\033[1;32m'
+    )
+    local num_colors=${#colors[@]}
+    local i=0
+    local is_first=true
+
+    printf "\033[?25l"
+    trap 'printf "\033[?25h"' EXIT INT TERM
+
+    while ! is_running; do
+        local c_idx=$(( (i / 3) % num_colors ))
+        local cur_color="${colors[$c_idx]}"
+        local spin="${spin_chars[i % 10]}"
+
+        if [ "$is_first" = false ]; then
+            printf "\033[9A\r"
+        fi
+        is_first=false
+
+        echo ""
+        printf "%b" "${cur_color}${BOLD}"
+        cat << 'BANNER'
+  ███████╗██████╗ ██████╗ 
+  ╚══███╔╝██╔══██╗██╔══██╗
+    ███╔╝ ██║  ██║██████╔╝
+   ███╔╝  ██║  ██║██╔══██╗
+  ███████╗██████╔╝██████╔╝
+  ╚══════╝╚═════╝ ╚═════╝ 
+BANNER
+        echo -e "${NC}  ${cur_color}${BOLD}ZDB${NC} ${DIM}• Starting engine ${spin}${NC}\n"
+
+        sleep 0.1
+        ((i++))
+        if [ "$i" -gt 30 ] && ! kill -0 "$safe_pid" 2>/dev/null && [ ! -S "$SOCKET" ]; then
+            break
+        fi
+        if [ "$i" -ge 250 ]; then
+            break
+        fi
+    done
+
+    printf "\033[?25h"
+    trap - EXIT INT TERM
+
+    if ! is_running; then
+        echo -e "  ${RED}Failed to start engine.${NC}\n"
+        if [ -f "$ZDB_DIR/logs/error.log" ]; then
+            tail -n 6 "$ZDB_DIR/logs/error.log" | sed 's/^/  /'
+            echo ""
+        fi
+        exit 1
+    fi
+
+    if [ "$is_first" = false ]; then
+        printf "\033[9A\r"
+    fi
+    print_banner
+    show_connection_card
+    exit 0
+}
+
+cmd_down() {
+    if [ ! -S "$SOCKET" ]; then
+        print_banner "gray"
+        exit 0
+    fi
+
+    "$MYSQLADMIN" $DEFAULTS --socket="$SOCKET" -u root -p"${MYSQL_ROOT_PASSWORD}" shutdown &>/dev/null || true
+
+    local spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local i=0
+
+    printf "\033[?25l"
+    trap 'printf "\033[?25h"' EXIT INT TERM
+
+    while [ -S "$SOCKET" ]; do
+        printf "\r  ${CYAN}%s${NC} Stopping MySQL..." "${spin_chars[i % 10]}"
+        sleep 0.08
+        ((i++))
+        if [ "$i" -ge 180 ]; then
+            break
+        fi
+    done
+
+    printf "\r\033[K\033[?25h"
+    trap - EXIT INT TERM
+
+    print_banner "gray"
+}
+
+cmd_status() {
+    if is_running; then
+        print_banner
+        show_connection_card
+    else
+        print_banner "gray"
+        local autostart_display
+        if [ -f "$PLIST_PATH" ]; then
+            autostart_display="${GREEN}Enabled${NC}"
+        else
+            autostart_display="${DIM}Disabled${NC}"
+        fi
+
+        printf "  %-12s %b\n" "Status:" "${RED}Stopped${NC}"
+        printf "  %-12s %b\n" "Autostart:" "$autostart_display"
+        printf "  %-12s %s\n" "Timezone:" "$MYSQL_TIMEZONE"
+        echo ""
+        echo "  Start with: zdb -u"
+        echo ""
+    fi
+}
+
+cmd_client() {
+    if ! is_running; then
+        echo -e "  ${RED}MySQL is not running. Starting it now...${NC}\n"
+        cmd_up
+    fi
+
+    shift || true
+    exec "$MYSQL_CLIENT" $DEFAULTS -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$@"
+}
+
+cmd_backup() {
+    if ! is_running; then
+        echo -e "  ${RED}MySQL is not running. Start with: zdb -u${NC}"
+        exit 1
+    fi
+
+    mkdir -p "$ZDB_DIR/backups"
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local file="$ZDB_DIR/backups/dump_${timestamp}.sql"
+
+    echo -e "  ${CYAN}Backing up all databases...${NC}"
+    "$MYSQLDUMP" $DEFAULTS -u root -p"${MYSQL_ROOT_PASSWORD}" \
+        --all-databases --routines --triggers --events \
+        --single-transaction > "$file"
+
+    local size
+    size=$(du -h "$file" | cut -f1)
+    echo -e "  ${GREEN}Backup saved:${NC} $file ($size)"
+}
+
+cmd_restore() {
+    local file="${2:-}"
+    if [ -z "$file" ]; then
+        echo "Usage: zdb --restore <file.sql>"
+        echo ""
+        if [ -d "$ZDB_DIR/backups" ] && [ "$(ls -A "$ZDB_DIR/backups" 2>/dev/null)" ]; then
+            echo "Available backups:"
+            ls -1t "$ZDB_DIR/backups"/*.sql 2>/dev/null | while read -r f; do
+                local size
+                size=$(du -h "$f" | cut -f1)
+                echo "  $f ($size)"
+            done
+        fi
+        exit 1
+    fi
+
+    if [ ! -f "$file" ]; then
+        echo -e "  ${RED}File not found: $file${NC}"
+        exit 1
+    fi
+
+    if ! is_running; then
+        echo -e "  ${RED}MySQL is not running. Start with: zdb -u${NC}"
+        exit 1
+    fi
+
+    echo -e "  ${CYAN}Restoring from: $file${NC}"
+    "$MYSQL_CLIENT" $DEFAULTS -u root -p"${MYSQL_ROOT_PASSWORD}" < "$file"
+    echo -e "  ${GREEN}Restore complete.${NC}"
+}
+
+cmd_help() {
+    print_banner
+    echo -e "  ${BOLD}${BANNER_COLOR}Usage${NC}"
+    echo "    zdb                 Start engine or show connection details"
+    echo "    zdb <command>"
+    echo ""
+    echo -e "  ${BOLD}${BANNER_COLOR}Commands${NC}"
+    echo "    up, -u              Start database engine"
+    echo "    down, -d            Stop database engine"
+    echo "    status, -s          Show status and connection details"
+    echo "    cli, -c             Open interactive MySQL console"
+    echo "    backup, -b          Create timestamped database backup"
+    echo "    restore <file>      Restore database from dump file"
+    echo "    help, -h            Show this help guide"
+    echo ""
+    echo -e "  ${BOLD}${BANNER_COLOR}System${NC}"
+    echo "    setup               Run interactive setup wizard"
+    echo "    autostart <mode>    Configure login startup with enable or disable"
+    echo "    install             Link zdb to system PATH"
+    echo "    uninstall           Remove global link and autostart"
+    echo ""
+}
+
+# Entrypoint
+
+cmd_smart_default() {
+    if [ ! -d "$ZDB_DIR/data/mysql" ]; then
+        print_banner
+        echo -e "  ${YELLOW}MySQL is not initialized yet.${NC}\n"
+        if [ -t 0 ]; then
+            read -r -p "  Would you like to initiate setup now? [Y/n]: " init_choice
+            case "$init_choice" in
+                [nN]*)
+                    echo "  Run 'zdb --setup' whenever you are ready."
+                    exit 0
+                    ;;
+                *)
+                    cmd_setup
+                    exit 0
+                    ;;
+            esac
+        else
+            echo "  Run 'zdb --setup' to initialize."
+            exit 1
+        fi
+    fi
+
+    if is_running; then
+        print_banner
+        show_connection_card
+    else
+        cmd_up
+    fi
+}
+
+# Dispatcher
+
+ACTION="${1:-}"
+
+case "$ACTION" in
+    "")
+        cmd_smart_default
+        ;;
+    -u|--up|up|-up)
+        cmd_up
+        ;;
+    -d|--down|down|-down)
+        cmd_down
+        ;;
+    -s|--status|status|-status)
+        cmd_status
+        ;;
+    -c|--client|client|cli|-client)
+        cmd_client "$@"
+        ;;
+    -b|--backup|backup|-backup)
+        cmd_backup
+        ;;
+    --restore|restore)
+        cmd_restore "$@"
+        ;;
+    --setup|setup)
+        cmd_setup
+        ;;
+    --autostart|autostart)
+        shift || true
+        cmd_autostart "${1:-}"
+        ;;
+    --no-autostart)
+        cmd_autostart_disable
+        ;;
+    --install|install)
+        cmd_install_symlinks
+        ;;
+    --uninstall|uninstall)
+        cmd_uninstall
+        ;;
+    -h|--help|help|-help)
+        cmd_help
+        ;;
+    *)
+        cmd_help
+        exit 1
+        ;;
+esac
