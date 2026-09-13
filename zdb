@@ -102,21 +102,21 @@ show_connection_card() {
         fi
     fi
 
-    printf "  %-12s %b\n" "Status:" "${GREEN}Running${NC}"
-    printf "  %-12s %s\n" "Socket:" "$SOCKET"
-    printf "  %-12s %s\n" "PID:" "$pid"
-    printf "  %-12s %s\n" "Memory:" "$memory_display"
-    printf "  %-12s %b\n" "Autostart:" "$autostart_display"
-    printf "  %-12s %s\n" "Timezone:" "$MYSQL_TIMEZONE"
-    printf "  %-12s %s\n" "Bind:" "$MYSQL_BIND_ADDRESS"
+    printf "  %-10s : %b\n" "Status" "${GREEN}Running${NC}"
+    printf "  %-10s : %s\n" "Socket" "$SOCKET"
+    printf "  %-10s : %s\n" "PID" "$pid"
+    printf "  %-10s : %s\n" "Memory" "$memory_display"
+    printf "  %-10s : %b\n" "Autostart" "$autostart_display"
+    printf "  %-10s : %s\n" "Timezone" "$MYSQL_TIMEZONE"
+    printf "  %-10s : %s\n" "Bind" "$MYSQL_BIND_ADDRESS"
     echo ""
     echo -e "  ${BOLD}${BANNER_COLOR}Connection${NC}"
-    printf "\t%-12s %s\n" "Host:" "localhost"
-    printf "\t%-12s %s\n" "Port:" "$MYSQL_PORT"
-    printf "\t%-12s %s\n" "User:" "$MYSQL_USER"
-    printf "\t%-12s %s\n" "Password:" "$MYSQL_PASSWORD"
+    printf "    %-8s : %s\n" "Host" "localhost"
+    printf "    %-8s : %s\n" "Port" "$MYSQL_PORT"
+    printf "    %-8s : %s\n" "User" "$MYSQL_USER"
+    printf "    %-8s : %s\n" "Password" "$MYSQL_PASSWORD"
     local url="mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@localhost:${MYSQL_PORT}/"
-    printf "\t%-12s %b\n" "URL:" "\033]8;;${url}\033\\${url}\033]8;;\033\\"
+    printf "    %-8s : %b\n" "URL" "\033]8;;${url}\033\\${url}\033]8;;\033\\"
     echo ""
 }
 
@@ -613,10 +613,10 @@ cmd_status() {
             autostart_display="${DIM}Disabled${NC}"
         fi
 
-        printf "  %-12s %b\n" "Status:" "${RED}Stopped${NC}"
-        printf "  %-12s %b\n" "Autostart:" "$autostart_display"
-        printf "  %-12s %s\n" "Timezone:" "$MYSQL_TIMEZONE"
-        printf "  %-12s %s\n" "Bind:" "$MYSQL_BIND_ADDRESS"
+        printf "  %-10s : %b\n" "Status" "${RED}Stopped${NC}"
+        printf "  %-10s : %b\n" "Autostart" "$autostart_display"
+        printf "  %-10s : %s\n" "Timezone" "$MYSQL_TIMEZONE"
+        printf "  %-10s : %s\n" "Bind" "$MYSQL_BIND_ADDRESS"
         echo ""
         echo "  Start with: zdb -u"
         echo ""
